@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Closures Demo — Counter & Quiz</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; }
+    body { max-width: 800px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 1rem; margin: 1rem 0; }
+    .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+    button { padding: .6rem .9rem; border-radius: 10px; border: 1px solid #ccc; background: #f7f7f7; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .choices { display: grid; gap: .5rem; margin: .75rem 0; }
+    .pill { padding: .45rem .7rem; border: 1px solid #ddd; border-radius: 999px; display: inline-block; }
+    .muted { color: #666; font-size: .9rem; }
+    .good { background: #eaffea; }
+    .bad  { background: #ffeeee; }
+  </style>
+</head>
+<body>
+  <h1>Closures & Lexical Scope: Counter + Quiz</h1>
+  <p class="muted">
+    The logic lives in <code>app.js</code> as closure-based factories. This page just wires buttons to those APIs.
+  </p>
+
+  <section class="card" id="counter-card">
+    <h2>Counter (closure keeps state private)</h2>
+    <div class="row">
+      <button id="dec">–1</button>
+      <span id="count" class="pill">0</span>
+      <button id="inc">+1</button>
+      <button id="reset">Reset</button>
+      <button id="snap">Snapshot</button>
+    </div>
+    <pre id="counter-log" class="muted"></pre>
+  </section>
+
+  <section class="card" id="quiz-card">
+    <h2>Quiz (stateful engine with private answers)</h2>
+    <div id="qtext"></div>
+    <div id="choices" class="choices"></div>
+    <div class="row">
+      <button id="prev">Prev</button>
+      <button id="next">Next</button>
+      <button id="restart">Restart</button>
+      <button id="score">Score</button>
+    </div>
+    <div class="muted" id="status"></div>
+  </section>
+
+  <section class="card">
+    <h2>Memory Notes</h2>
+    <ul>
+      <li>As long as you hold a reference to a counter/quiz instance, its closed-over state stays alive.</li>
+      <li>Don’t capture DOM nodes inside closures of your logic module; keep logic and rendering separate (as here).</li>
+      <li>Prefer snapshots (plain data) when persisting; dispose or drop references when done.</li>
+      <li>Use <code>WeakMap</code> for metadata keyed by objects you don’t own to reduce leaks.</li>
+    </ul>
+  </section>
+
+  <script type="module">
+    import { createCounter, createQuiz, makeLeakyCache, makeEphemeralMetaStore } from './app.js';
+
+    // ---- Counter wiring (UI owns DOM; logic owns state) ----
+    const counter = createCounter(0);
+    const countEl = document.getElementById('count');
+    const logEl = document.getElementById('counter-log');
+
+    function renderCounter() {
+      countEl.textContent = String(counter.get());
+    }
+    document.getElementById('inc').addEventListener('click', () => {
+      counter.increment(1);
+      renderCounter();
+    });
+    document.getElementById('dec').addEventListener('click', () => {
+      counter.decrement(1);
+      renderCounter();
+    });
+    document.getElementById('reset').addEventListener('click', () => {
+      counter.reset(0);
+      renderCounter();
+    });
+    document.getElementById('snap').addEventListener('click', () => {
+      logEl.textContent = 'Snapshot: ' + JSON.stringify(counter.snapshot());
+    });
+    renderCounter();
+
+    // ---- Quiz wiring ----
+    const sampleQuestions = [
+      { id: 'q1', text: 'Closures capture variables from…', choices: ['Global scope', 'Lexical scope', 'Dynamic scope'], answer: 1 },
+      { id: 'q2', text: 'Which structure helps avoid leaks for object keys?', choices: ['Map', 'WeakMap', 'Set'], answer: 1 },
+      { id: 'q3', text: 'What keeps closed-over variables alive?', choices: ['The call stack', 'The event loop', 'Reachable function references'], answer: 2 },
+    ];
+    const quiz = createQuiz(sampleQuestions);
+
+    const qtext = document.getElementById('qtext');
+    const choices = document.getElementById('choices');
+    const status = document.getElementById('status');
+    const btnPrev = document.getElementById('prev');
+    const btnNext = document.getElementById('next');
+
+    function renderQuiz() {
+      const cur = quiz.getCurrent();
+      qtext.textContent = `Q${cur.index + 1}/${cur.total}: ${cur.text}`;
+
+      choices.innerHTML = '';
+      cur.choices.forEach((c, i) => {
+        const b = document.createElement('button');
+        b.textContent = c;
+        b.className = 'pill';
+        b.addEventListener('click', () => {
+          const res = quiz.answer(i);
+          // Visual hint only—engine keeps the truth.
+          b.classList.add(res.correct ? 'good' : 'bad');
+          updateStatus();
+        });
+        choices.appendChild(b);
+      });
+
+      btnPrev.disabled = cur.isFirst;
+      btnNext.disabled = cur.isLast;
+      updateStatus();
+    }
+
+    function updateStatus() {
+      const { correct, total } = quiz.score();
+      const finished = quiz.isFinished();
+      status.textContent = finished
+        ? `Finished! Score: ${correct}/${total}`
+        : `Progress: ${correct}/${total} correct so far`;
+    }
+
+    btnPrev.addEventListener('click', () => { quiz.prev(); renderQuiz(); });
+    btnNext.addEventListener('click', () => { quiz.next(); renderQuiz(); });
+    document.getElementById('restart').addEventListener('click', () => { quiz.restart(); renderQuiz(); });
+    document.getElementById('score').addEventListener('click', updateStatus);
+
+    renderQuiz();
+
+    // ---- Leak demo (for learning) ----
+    // Devil's advocate: holding onto big objects here will leak if we keep `leaky` alive.
+    const leaky = makeLeakyCache();
+    // For demonstration only—pretend this is a heavy object (e.g., an Image or DOM node).
+    leaky.add({ big: new Array(100_000).fill(0) });
+    // Counterpoint: ephemeral store won't leak when keys are gone.
+    const ephemeral = makeEphemeralMetaStore();
+    let ephemeralKey = { id: 123 };
+    ephemeral.set(ephemeralKey, { temp: 'data' });
+    // Once we drop the only strong ref, GC can reclaim the WeakMap entry eventually.
+    ephemeralKey = null;
+
+    // If you want to actually *release* the leaky cache:
+    window.addEventListener('beforeunload', () => {
+      leaky.clear(); // avoid retaining memory across hot reloads in dev servers
+      quiz.dispose(); // symmetrical, though it holds no externals
+    });
+
+    // Design choice to avoid hidden retention:
+    // - The logic module never captures DOM nodes or module-level singletons.
+    // - UI keeps references to the instances; dropping `counter`/`quiz` makes their
+    //   closures unreachable => GC frees them.
+  </script>
+</body>
+</html>
